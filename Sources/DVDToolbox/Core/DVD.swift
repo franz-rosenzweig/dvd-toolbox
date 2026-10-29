@@ -13,6 +13,11 @@ struct DVDDisc: Equatable, Sendable {
     /// back to reading through the file system, which fails on some discs ("Encode failed (error 5)").
     var input: String { device.hasPrefix("/dev/disk") ? "/dev/r" + device.dropFirst(5) : volume.path }
 
+    /// `find` on a thread of its own, given up after `seconds` (nil): see `offThread`.
+    static func find(within seconds: Double) async -> DVDDisc?? {
+        await offThread(within: seconds) { find() }
+    }
+
     static func find() -> DVDDisc? {
         let fm = FileManager.default
         for v in fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: [.skipHiddenVolumes]) ?? [] {

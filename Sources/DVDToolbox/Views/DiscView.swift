@@ -11,8 +11,11 @@ struct DiscView: View {
         Group {
             if let disc = store.disc { content(disc) }
             else {
-                Image(systemName: "opticaldisc").font(.system(size: 56, weight: .light)).foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 14) {
+                    Image(systemName: "opticaldisc").font(.system(size: 56, weight: .light)).foregroundStyle(.tertiary)
+                    if let e = store.driveError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .navigationTitle(store.disc?.label ?? "Disc")
@@ -22,7 +25,8 @@ struct DiscView: View {
             while !Task.isCancelled {
                 if store.libraries.isEmpty || store.jellyfinError != nil { await store.loadLibraries() }
                 if store.serverError != nil, store.item != nil { await store.checkServer() }
-                let fine = !store.libraries.isEmpty && store.jellyfinError == nil && store.serverError == nil
+                if store.driveError != nil { await store.look() }
+                let fine = !store.libraries.isEmpty && store.jellyfinError == nil && store.serverError == nil && store.driveError == nil
                 try? await Task.sleep(for: .seconds(fine ? 30 : 10))
             }
         }
@@ -32,6 +36,7 @@ struct DiscView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                if let e = store.driveError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if let e = store.error { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if let e = store.jellyfinError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if let e = store.serverError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }

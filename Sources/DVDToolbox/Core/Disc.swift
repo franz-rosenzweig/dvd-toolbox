@@ -68,9 +68,16 @@ final class DiscStore {
     // MARK: the disc
 
     /// Looks for a disc, and reads a new one.
+    /// Set when the drive stopped answering while the app looked for a disc.
+    var driveError: String?
+    private var lookingForDisc = false
+
     func look() async {
-        guard !frozen else { return }
-        let d = await Task.detached { DVDDisc.find() }.value
+        guard !frozen, !lookingForDisc else { return }
+        lookingForDisc = true
+        defer { lookingForDisc = false }
+        guard let d = await DVDDisc.find(within: 10) else { driveError = "The drive isn’t answering"; return }
+        driveError = nil
         guard d?.id != disc?.id else { started = true; return }
         if d == nil, job != nil { return }
         load(d)
@@ -84,7 +91,7 @@ final class DiscStore {
         scanTask?.cancel()
         disc = d
         scan = nil; results = []; chosen = nil; poster = nil; episodes = []; selected = []; feature = nil; runtime = nil; featureByHand = false
-        existing = nil; present = []; error = nil; serverError = nil
+        existing = nil; present = []; error = nil; serverError = nil; scanning = false
         guard let d else { return }
         hint = LabelHint.parse(d.label)
         query = hint.query
@@ -92,10 +99,10 @@ final class DiscStore {
         season = hint.season ?? 1
         scanTask = Task {
             scanning = true
-            defer { scanning = false }
             do {
                 var s = try await HandBrake.scan(d.input, minimum: minimum)
-                s.layout = await Task.detached { IFO.layouts(d.volume.appendingPathComponent("VIDEO_TS", isDirectory: true)) }.value
+                let ts = d.volume.appendingPathComponent("VIDEO_TS", isDirectory: true)
+                s.layout = await offThread(within: 20) { IFO.layouts(ts) } ?? [:]
                 guard disc?.id == d.id else { return }
                 scan = s
                 kind = Pick.guess(s, hint: hint)
@@ -103,6 +110,8 @@ final class DiscStore {
             } catch is CancellationError { return } catch {
                 self.error = (error as? AppError)?.detail ?? error.localizedDescription
             }
+            // the titles are read: the lookup and the server's answer fill in around them
+            scanning = false
             await search()
         }
     }

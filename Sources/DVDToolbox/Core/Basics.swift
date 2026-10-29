@@ -186,6 +186,24 @@ extension Nav {
     }
 }
 
+/// Runs `work` on a thread of its own and gives up waiting after `seconds` (nil). For reads from the disc:
+/// a drive that has stopped answering leaves the call waiting in the kernel, and it must not hold the
+/// threads the rest of the app runs on.
+func offThread<T: Sendable>(within seconds: Double, _ work: @escaping @Sendable () -> T) async -> T? {
+    await withCheckedContinuation { (cont: CheckedContinuation<T?, Never>) in
+        let once = Once()
+        Thread.detachNewThread { let r = work(); if once.claim() { cont.resume(returning: r) } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { if once.claim() { cont.resume(returning: nil) } }
+    }
+}
+
+/// True the first time only: whichever of the work and the timer comes first resumes the caller.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
+
 /// What to show for a failure: the app's own message, or "Can’t reach X · why" for a network error.
 func because(_ error: Error, _ fallback: String) -> String {
     if let e = error as? AppError { return e.detail }
