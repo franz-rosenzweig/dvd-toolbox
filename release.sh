@@ -87,6 +87,7 @@ cask "dvd-toolbox" do
   depends_on formula: "rsync"
   depends_on formula: "handbrake"
   depends_on formula: "libdvdcss"
+  depends_on formula: "ffmpeg"
 
   app "DVD Toolbox.app"
 
