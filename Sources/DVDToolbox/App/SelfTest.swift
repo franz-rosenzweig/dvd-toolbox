@@ -41,7 +41,7 @@ enum SelfTest {
         let labels: [(String, String, Int?, Int?)] = [
             ("FRIENDS_S1_D2", "Friends", 1, 2), ("SEINFELD_SEASON_3_DISC_1", "Seinfeld", 3, 1), ("THE_LORD_OF_THE_RINGS_WS", "The Lord of the Rings", nil, nil),
             ("AMELIE", "Amelie", nil, nil), ("BAND_OF_BROTHERS_D3", "Band of Brothers", nil, 3), ("ANDOR_S1D2", "Andor", 1, 2),
-            ("MISSION_IMPOSSIBLE_16X9", "Mission Impossible", nil, nil),
+            ("MISSION_IMPOSSIBLE_16X9", "Mission Impossible", nil, nil), ("<THE_SHACK>", "The Shack", nil, nil), ("INTO_THE_WILD_D1", "Into the Wild", nil, 1),
         ]
         for (label, q, s, d) in labels {
             let h = LabelHint.parse(label)

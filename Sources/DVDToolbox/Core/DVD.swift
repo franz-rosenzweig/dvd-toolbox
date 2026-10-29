@@ -170,7 +170,9 @@ struct LabelHint: Equatable {
                                      "R1", "R2", "R4", "SE", "CE", "UK", "US", "EU", "NA", "PS", "LB", "AC3", "DTS"]
 
     static func parse(_ label: String) -> LabelHint {
-        var words = label.uppercased().replacingOccurrences(of: "-", with: "_").replacingOccurrences(of: ".", with: "_")
+        // only letters, digits and & count: "<THE_SHACK>" is The Shack
+        let kept = String(label.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "&" ? Character($0) : "_" })
+        var words = kept.uppercased()
             .split(whereSeparator: { $0 == "_" || $0 == " " }).map(String.init)
         var season: Int?, disc: Int?
         var keep: [String] = []
