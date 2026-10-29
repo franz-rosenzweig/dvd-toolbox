@@ -11,7 +11,9 @@ Radarr and Sonarr name things. Not a player.
   season's episodes there are read and the disc starts after the last one.
 - **Rip**: each title is encoded by HandBrakeCLI to MKV: H.265 (x265, or H.264, or the Mac's hardware
   H.265, in Settings), every audio track copied as it is, every subtitle track, chapters. Progress and
-  Cancel; a file whose length is not the title's is not kept. The disc is ejected when its rip is done.
+  Cancel; a file whose length is not the title's is not kept, and HandBrake's log of each rip is in
+  `~/Library/Logs/DVD Toolbox`. HandBrake reads the raw drive (`/dev/rdiskN`): the mounted `/dev/diskN` is
+  busy, and libdvdcss cannot open it. The disc is ejected when its rip is done.
 - **Names**: `Movies/Title (Year)/Title (Year).mkv` with `movie.nfo` (TMDB and IMDb ids) and the poster;
   `Shows/Show (Year)/Season 1/Show - S01E01 - Episode.mkv` with `tvshow.nfo` and the poster. A folder the
   server already has keeps its name and its files: a film already there gets ` - DVD` as another version.

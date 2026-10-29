@@ -272,9 +272,10 @@ final class Jobs {
         }
     }
 
-    /// HandBrake's log of the last rip of a file, in ~/Library/Logs/DVD Toolbox.
+    /// HandBrake's log of the last rip of a file, in ~/Library/Logs/DVD Toolbox (the self-test's copy keeps its own).
     nonisolated static var logs: URL {
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/DVD Toolbox", isDirectory: true)
+        let name = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String ?? "DVD Toolbox"
+        return FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(name, isDirectory: true)
     }
 
     nonisolated static func keepLog(_ o: Proc.Output, name: String) {
