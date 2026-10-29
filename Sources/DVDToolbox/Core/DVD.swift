@@ -67,6 +67,69 @@ struct DVDTitle: Identifiable, Equatable, Hashable, Sendable {
 struct DVDScan: Equatable, Sendable {
     var titles: [DVDTitle]
     var main: Int?
+    /// How each title's pieces lie on the disc, from its IFO files (none for a folder of files).
+    var layout: [Int: IFO.Layout] = [:]
+
+    func inOrder(_ t: DVDTitle) -> Bool { layout[t.index].map { $0.backward == 0 } ?? true }
+}
+
+/// The disc's own tables: VIDEO_TS.IFO and VTS_nn_0.IFO, which are not encrypted. They say where each
+/// title's pieces (cells) lie. A film plays its cells in disc order; the decoy titles a protected disc
+/// carries to confuse rippers jump back and forth.
+enum IFO {
+    struct Layout: Equatable, Sendable {
+        var cells: Int
+        var backward: Int
+    }
+
+    static func layouts(_ videoTS: URL) -> [Int: Layout] {
+        func file(_ name: String) -> [UInt8]? {
+            let fm = FileManager.default
+            let match = (try? fm.contentsOfDirectory(atPath: videoTS.path))?.first { $0.uppercased() == name }
+            return match.flatMap { try? Data(contentsOf: videoTS.appendingPathComponent($0)) }.map { [UInt8]($0) }
+        }
+        guard let vmg = file("VIDEO_TS.IFO") else { return [:] }
+        var vts: [Int: [UInt8]] = [:]
+        var out: [Int: Layout] = [:]
+        let tt = Int(u32(vmg, 0xC4) ?? 0) * 2048
+        guard let count = u16(vmg, tt) else { return [:] }
+        for i in 0..<Int(count) {
+            let e = tt + 8 + i * 12
+            guard e + 8 <= vmg.count else { break }
+            let n = Int(vmg[e + 6]), ttn = Int(vmg[e + 7])
+            if vts[n] == nil { vts[n] = file(String(format: "VTS_%02d_0.IFO", n)) ?? [] }
+            if let l = layout(vts[n]!, ttn: ttn) { out[i + 1] = l }
+        }
+        return out
+    }
+
+    /// The cells of a title's first program chain, read from its VTS IFO.
+    static func layout(_ v: [UInt8], ttn: Int) -> Layout? {
+        guard let p = u32(v, 0xC8), let g = u32(v, 0xCC), ttn >= 1 else { return nil }
+        let ptt = Int(p) * 2048, pgcit = Int(g) * 2048
+        guard let off = u32(v, ptt + 8 + (ttn - 1) * 4), let pgcn = u16(v, ptt + Int(off)), pgcn >= 1,
+              let start = u32(v, pgcit + 8 + (Int(pgcn) - 1) * 8 + 4) else { return nil }
+        let pgc = pgcit + Int(start)
+        guard pgc + 0xEA <= v.count, let table = u16(v, pgc + 0xE8) else { return nil }
+        let cells = Int(v[pgc + 3])
+        var last: UInt32?
+        var backward = 0
+        for c in 0..<cells {
+            let ce = pgc + Int(table) + c * 24
+            guard let first = u32(v, ce + 8), let end = u32(v, ce + 20) else { return nil }
+            if let last, first < last { backward += 1 }
+            last = end
+        }
+        return Layout(cells: cells, backward: backward)
+    }
+
+    private static func u16(_ b: [UInt8], _ o: Int) -> UInt16? {
+        o >= 0 && o + 2 <= b.count ? UInt16(b[o]) << 8 | UInt16(b[o + 1]) : nil
+    }
+
+    private static func u32(_ b: [UInt8], _ o: Int) -> UInt32? {
+        o >= 0 && o + 4 <= b.count ? UInt32(b[o]) << 24 | UInt32(b[o + 1]) << 16 | UInt32(b[o + 2]) << 8 | UInt32(b[o + 3]) : nil
+    }
 }
 
 enum HandBrake {
@@ -139,8 +202,11 @@ enum HandBrake {
 
     /// The arguments for one title: MKV with chapters, the video encoded, every audio track copied as it is
     /// (encoded to AC3 only when MKV cannot carry it) and every subtitle track.
-    static func args(input: String, title: DVDTitle.Stored, output: String, encoder: Encoder) -> [String] {
+    /// `navigate: false` reads the title's cells in order (HandBrake's libdvdread reader) instead of
+    /// following the disc's navigation, which on some protected discs leads nowhere.
+    static func args(input: String, title: DVDTitle.Stored, output: String, encoder: Encoder, navigate: Bool = true) -> [String] {
         var a = ["-i", input, "-t", String(title.index), "-o", output, "-f", "av_mkv", "--markers"]
+        if !navigate { a.append("--no-dvdnav") }
         a += encoder.args + ["--vfr", "--crop-mode", "conservative", "--comb-detect", "--decomb"]
         if title.audio.isEmpty { a += ["-a", "none"] }
         else {
@@ -225,8 +291,8 @@ enum Pick {
     }
 
     /// Episodes: two or more titles of 15 to 70 minutes, close to one another in length.
-    static func episodes(_ titles: [DVDTitle]) -> [DVDTitle] {
-        let d = distinct(titles).filter { $0.seconds >= 900 && $0.seconds <= 4200 }
+    static func episodes(_ titles: [DVDTitle], layout: [Int: IFO.Layout] = [:]) -> [DVDTitle] {
+        let d = distinct(titles).filter { $0.seconds >= 900 && $0.seconds <= 4200 && (layout[$0.index]?.backward ?? 0) == 0 }
         guard d.count >= 2 else { return [] }
         let lengths = d.map(\.seconds).sorted()
         let median = lengths[lengths.count / 2]
@@ -234,7 +300,7 @@ enum Pick {
     }
 
     static func guess(_ scan: DVDScan, hint: LabelHint) -> Kind {
-        let eps = episodes(scan.titles)
+        let eps = episodes(scan.titles, layout: scan.layout)
         let longest = distinct(scan.titles).map(\.seconds).max() ?? 0
         if hint.season != nil, eps.count >= 1 { return .tv }
         if eps.count >= 3 && longest <= 4500 { return .tv }
@@ -243,7 +309,17 @@ enum Pick {
     }
 
     /// The movie: HandBrake's main feature, else the longest title.
-    static func feature(_ scan: DVDScan) -> DVDTitle? {
-        scan.titles.first { $0.index == scan.main } ?? scan.titles.max { $0.seconds < $1.seconds }
+    /// The film: among the long titles, the ones whose pieces are in order; of those HandBrake's main
+    /// feature when its length fits TMDB's running time, else the one closest to it, else the longest.
+    static func feature(_ scan: DVDScan, runtime: Int? = nil) -> DVDTitle? {
+        let longest = scan.titles.map(\.seconds).max() ?? 0
+        var c = scan.titles.filter { Double($0.seconds) >= Double(longest) * 0.6 }
+        let ordered = c.filter(scan.inOrder)
+        if !ordered.isEmpty { c = ordered }
+        let want = (runtime ?? 0) * 60
+        let main = c.first { $0.index == scan.main }
+        if let main, want == 0 || abs(main.seconds - want) <= want / 10 { return main }
+        if want > 0 { return c.min { (abs($0.seconds - want), $0.index) < (abs($1.seconds - want), $1.index) } }
+        return main ?? c.max { $0.seconds < $1.seconds }
     }
 }

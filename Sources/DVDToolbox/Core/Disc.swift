@@ -83,7 +83,7 @@ final class DiscStore {
     func load(_ d: DVDDisc?, minimum: Int = 120) {
         scanTask?.cancel()
         disc = d
-        scan = nil; results = []; chosen = nil; poster = nil; episodes = []; selected = []; feature = nil
+        scan = nil; results = []; chosen = nil; poster = nil; episodes = []; selected = []; feature = nil; runtime = nil; featureByHand = false
         existing = nil; present = []; error = nil; serverError = nil
         guard let d else { return }
         hint = LabelHint.parse(d.label)
@@ -94,7 +94,8 @@ final class DiscStore {
             scanning = true
             defer { scanning = false }
             do {
-                let s = try await HandBrake.scan(d.input, minimum: minimum)
+                var s = try await HandBrake.scan(d.input, minimum: minimum)
+                s.layout = await Task.detached { IFO.layouts(d.volume.appendingPathComponent("VIDEO_TS", isDirectory: true)) }.value
                 guard disc?.id == d.id else { return }
                 scan = s
                 kind = Pick.guess(s, hint: hint)
@@ -106,10 +107,15 @@ final class DiscStore {
         }
     }
 
+    /// TMDB's running time of the chosen film.
+    var runtime: Int?
+    /// Set when the owner picks the film's title, so a lookup does not change it back.
+    var featureByHand = false
+
     func pickTitles() {
         guard let scan else { return }
-        feature = Pick.feature(scan)?.index
-        let eps = Pick.episodes(scan.titles)
+        if !featureByHand { feature = Pick.feature(scan, runtime: runtime)?.index }
+        let eps = Pick.episodes(scan.titles, layout: scan.layout)
         selected = Set((eps.isEmpty ? Pick.distinct(scan.titles) : eps).map(\.index))
     }
 
@@ -160,6 +166,9 @@ final class DiscStore {
             season = min(max(1, season), seasons)
             await loadSeason()
         } else {
+            // the film's running time picks its title when the disc carries decoys of other lengths
+            runtime = await TMDB.runtime(it.id)
+            if chosen == id, !featureByHand, let scan { feature = Pick.feature(scan, runtime: runtime)?.index }
             await checkServer()
         }
         if chosen == id, let p = it.poster { poster = await TMDB.poster(p) }

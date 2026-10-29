@@ -88,6 +88,11 @@ enum TMDB {
         return o["number_of_seasons"] as? Int ?? 1
     }
 
+    /// A film's running time in minutes, which picks the title on a disc that carries decoys.
+    static func runtime(_ movie: Int) async -> Int? {
+        (try? await get("/movie/\(movie)"))?["runtime"] as? Int
+    }
+
     static func ids(_ item: TMDBItem) async -> TMDBIds {
         guard let o = try? await get(item.kind == .movie ? "/movie/\(item.id)/external_ids" : "/tv/\(item.id)/external_ids") else { return TMDBIds() }
         return TMDBIds(imdb: (o["imdb_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }, tvdb: o["tvdb_id"] as? Int)

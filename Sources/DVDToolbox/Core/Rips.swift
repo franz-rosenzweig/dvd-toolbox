@@ -221,34 +221,51 @@ final class Jobs {
                 job.current = p.id
                 job.fraction = 0
                 job.eta = nil
-                let args = HandBrake.args(input: job.input, title: p.title, output: partial.path, encoder: Config.encoder)
-                let split = LineSplitter()
-                let o: Proc.Output
-                do {
-                    o = try await Proc.run(hb, args, onStdout: { data in
-                        let lines = split.feed(data)
-                        Task { @MainActor in
-                            for l in lines { if let pr = HandBrake.progress(l) { job.fraction = pr.fraction; job.eta = pr.eta } }
-                        }
-                    })
-                } catch {
+                var size: Int64 = 0
+                var failure: String?
+                // first as a player would, following the disc's navigation; a title that stops early that way is
+                // read again cell by cell: on a disc with decoys the navigation can lead nowhere while the cells
+                // hold the film
+                for navigate in [true, false] {
                     try? fm.removeItem(at: partial)
-                    throw error
-                }
-                if Task.isCancelled { try? fm.removeItem(at: partial); throw CancellationError() }
-                Self.keepLog(o, name: dest.deletingPathExtension().lastPathComponent)
-                let size = (try? fm.attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
-                let got = size > 0 && Config.env("DVD_TEST_STOP_AT") == nil ? await Self.duration(partial) : nil
-                let whole = got.map { abs($0 - Double(p.seconds)) <= max(10, Double(p.seconds) * 0.03) }
-                // HandBrake can report a read error for sectors after the end of the film (some discs carry them
-                // to confuse rippers): a file that plays the title's whole length is kept all the same
-                guard size > 0, o.status == 0 ? whole != false : whole == true else {
-                    try? fm.removeItem(at: partial)
-                    job.parts[i].state = .failed
-                    var why = o.errText.split(separator: "\n").last { $0.localizedCaseInsensitiveContains("error") || $0.contains("libdvd") }.map(String.init) ?? "HandBrake exit \(o.status)"
+                    job.fraction = 0
+                    job.eta = nil
+                    var args = HandBrake.args(input: job.input, title: p.title, output: partial.path, encoder: Config.encoder, navigate: navigate)
+                    if navigate, let s = Config.env("DVD_TEST_STOP_FIRST") { args += ["--stop-at", "seconds:\(s)"] }
+                    let split = LineSplitter()
+                    let o: Proc.Output
+                    do {
+                        o = try await Proc.run(hb, args, onStdout: { data in
+                            let lines = split.feed(data)
+                            Task { @MainActor in
+                                for l in lines { if let pr = HandBrake.progress(l) { job.fraction = pr.fraction; job.eta = pr.eta } }
+                            }
+                        })
+                    } catch {
+                        try? fm.removeItem(at: partial)
+                        throw error
+                    }
+                    if Task.isCancelled { try? fm.removeItem(at: partial); throw CancellationError() }
+                    let name = dest.deletingPathExtension().lastPathComponent
+                    Self.keepLog(o, name: navigate ? name : name + " · cells")
+                    size = (try? fm.attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
+                    let got = size > 0 && Config.env("DVD_TEST_STOP_AT") == nil ? await Self.duration(partial) : nil
+                    let whole = got.map { abs($0 - Double(p.seconds)) <= max(10, Double(p.seconds) * 0.03) }
+                    // HandBrake can report a read error for sectors after the end of the film (some discs carry them
+                    // to confuse rippers): a file that plays the title's whole length is kept all the same
+                    if size > 0, o.status == 0 ? whole != false : whole == true { failure = nil; break }
+                    // HandBrake's own complaint when it failed; when it says it finished, the file says what went wrong
+                    var why = o.status == 0 ? "Stopped" : o.errText.split(separator: "\n").last {
+                        ($0.localizedCaseInsensitiveContains("error") && !$0.contains("decoder errors")) || $0.contains("libdvd")
+                    }.map(String.init) ?? "HandBrake exit \(o.status)"
                     if why.contains("(error 5)") { why = "Can’t read the disc" }
                     if let got, whole == false { why += " at \(Fmt.clock(Int(got))) of \(Fmt.clock(p.seconds))" }
-                    throw AppError("\(p.label): \(why)")
+                    failure = "\(p.label): \(why)"
+                }
+                if let failure {
+                    try? fm.removeItem(at: partial)
+                    job.parts[i].state = .failed
+                    throw AppError(failure)
                 }
                 try? fm.removeItem(at: dest)
                 try fm.moveItem(at: partial, to: dest)

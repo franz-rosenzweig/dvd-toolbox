@@ -151,7 +151,7 @@ struct DiscView: View {
     }
 
     private func toggle(_ t: DVDTitle) {
-        if store.kind == .movie { store.feature = t.index }
+        if store.kind == .movie { store.feature = t.index; store.featureByHand = true }
         else if store.selected.contains(t.index) { store.selected.remove(t.index) }
         else { store.selected.insert(t.index) }
     }

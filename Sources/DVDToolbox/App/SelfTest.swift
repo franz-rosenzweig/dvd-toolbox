@@ -59,6 +59,26 @@ enum SelfTest {
         check(Pick.guess(bonus, hint: LabelHint.parse("FILM")) == .movie && Pick.feature(bonus)?.index == 1, "a 95-minute film with two 25-minute extras is a movie")
         check(Pick.guess(DVDScan(titles: [t(1, 2700), t(2, 2600)], main: 1), hint: LabelHint.parse("SHOW_S2_D1")) == .tv, "two episodes and a season in the label are TV")
 
+        // a disc with decoys, laid out like The Shack: the film is 1 (and its twin 29); 27 and 30 run ten minutes
+        // longer, 28 and 30 play their pieces out of order
+        let ifo = ifoFolder(titles: [(1, 1), (1, 2)], pgcs: [1: [[(0, 6), (9299, 168497), (168498, 373653)], [(0, 6), (1332853, 1530014), (373654, 526141)]]])
+        let lay = IFO.layouts(ifo)
+        check(lay[1] == IFO.Layout(cells: 3, backward: 0) && lay[2] == IFO.Layout(cells: 3, backward: 1), "the IFO tables read: title 1 in order, title 2 jumps back (\(lay))")
+        check(IFO.layouts(URL(fileURLWithPath: "/nonexistent")).isEmpty, "a folder without IFO files has no layout")
+        var shack = DVDScan(titles: [t(1, 7933, 17), t(27, 8532, 17), t(28, 7983, 17), t(29, 7933, 17), t(30, 8532, 17)], main: 28)
+        shack.layout = [1: .init(cells: 19, backward: 0), 27: .init(cells: 25, backward: 0), 28: .init(cells: 25, backward: 11), 29: .init(cells: 19, backward: 0), 30: .init(cells: 25, backward: 2)]
+        check(Pick.feature(shack, runtime: 132)?.index == 1, "with HandBrake's pick a decoy, the film is the title in order closest to TMDB's 132 minutes: \(Pick.feature(shack, runtime: 132)?.index ?? 0)")
+        shack.main = 1
+        check(Pick.feature(shack, runtime: 132)?.index == 1 && Pick.feature(shack)?.index == 1, "and HandBrake's pick when it is in order and fits")
+        shack.main = 30
+        check(Pick.feature(shack, runtime: 142)?.index == 27, "a film of 142 minutes is the in-order 2:22 title, not the jumbled one")
+        var season = DVDScan(titles: [t(1, 2700), t(2, 2650), t(3, 2720), t(4, 2690)], main: 1)
+        season.layout = [3: .init(cells: 9, backward: 4)]
+        check(Pick.episodes(season.titles, layout: season.layout).map(\.index) == [1, 2, 4], "a jumbled title is not an episode")
+        let nav = HandBrake.args(input: "/dev/rdisk8", title: DVDTitle.Stored(index: 1, audio: [1], subtitles: []), output: "/tmp/o.mkv", encoder: .h265, navigate: false)
+        check(nav.contains("--no-dvdnav") && !HandBrake.args(input: "/dev/rdisk8", title: DVDTitle.Stored(index: 1, audio: [1], subtitles: []), output: "/tmp/o.mkv", encoder: .h265).contains("--no-dvdnav"),
+              "reading cell by cell is HandBrake's --no-dvdnav, only when asked for")
+
         let mounted = DVDDisc(volume: URL(fileURLWithPath: "/Volumes/X"), label: "X", device: "/dev/disk8", id: "x")
         check(mounted.input == "/dev/rdisk8", "HandBrake reads the raw drive, /dev/rdisk8, not the mounted /dev/disk8")
         check(DVDDisc(volume: URL(fileURLWithPath: "/tmp/f"), label: "F", device: "", id: "f").input == "/tmp/f", "a folder is read as it is")
@@ -178,15 +198,20 @@ enum SelfTest {
         check(left.isEmpty, "no part file is left (\(left))")
         check(!FileManager.default.fileExists(atPath: server.appendingPathComponent("films/Amélie (2001)").path), "and nothing went to the server")
 
+        // this time following the navigation stops after a second, as on a disc with decoys: it is ripped again cell by cell
+        setenv("DVD_TEST_STOP_FIRST", "1", 1)
         await s.rip(upload: true)
         guard let job = Jobs.shared.list.first, job.id != first.id else { return check(false, "the second rip starts") }
         check(await until(240, { !job.active }), "ripped and sent: \(job.state.rawValue) \(job.error ?? "")")
+        unsetenv("DVD_TEST_STOP_FIRST")
+        let logs = (try? FileManager.default.contentsOfDirectory(atPath: Jobs.logs.path)) ?? []
+        check(logs.contains("Amélie (2001).log") && logs.contains("Amélie (2001) · cells.log"), "the rip that stopped early was read again cell by cell (\(logs.filter { $0.hasPrefix("Am") }))")
         check(job.state == .done, "the movie is in Jellyfin")
         let dir = server.appendingPathComponent("films/Amélie (2001)")
         let got = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
         check(got == ["Amélie (2001).mkv", "movie.nfo", "poster.jpg"], "the folder on the server: \(got)")
         check(got.first?.unicodeScalars.count == 17, "with its name composed, as the library writes it")
-        if let d = await Jobs.duration(dir.appendingPathComponent("Amélie (2001).mkv")) { check(abs(d - 12) < 1.5, "the film plays \(String(format: "%.1f", d)) s") }
+        if let d = await Jobs.duration(dir.appendingPathComponent("Amélie (2001).mkv")) { check(abs(d - 20) < 1.5, "the film plays all \(String(format: "%.1f", d)) s") }
     }
 
     static func saved() async {
@@ -227,6 +252,42 @@ enum SelfTest {
     }
 
     // MARK: helpers
+
+    /// A VIDEO_TS folder with just enough IFO for the layout: titles as (VTS, title in VTS), and per VTS the
+    /// cells of each program chain as (first sector, last sector).
+    static func ifoFolder(titles: [(Int, Int)], pgcs: [Int: [[(UInt32, UInt32)]]]) -> URL {
+        let dir = out.appendingPathComponent("ifo/VIDEO_TS", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        func put16(_ b: inout [UInt8], _ o: Int, _ v: Int) { b[o] = UInt8(v >> 8 & 0xFF); b[o + 1] = UInt8(v & 0xFF) }
+        func put32(_ b: inout [UInt8], _ o: Int, _ v: UInt32) { for k in 0..<4 { b[o + k] = UInt8(v >> (24 - 8 * UInt32(k)) & 0xFF) } }
+        var vmg = [UInt8](repeating: 0, count: 4096)
+        put32(&vmg, 0xC4, 1)
+        put16(&vmg, 2048, titles.count)
+        for (i, t) in titles.enumerated() { vmg[2048 + 8 + i * 12 + 6] = UInt8(t.0); vmg[2048 + 8 + i * 12 + 7] = UInt8(t.1) }
+        try? Data(vmg).write(to: dir.appendingPathComponent("VIDEO_TS.IFO"))
+        for (n, chains) in pgcs {
+            var v = [UInt8](repeating: 0, count: 2048 * 3 + chains.reduce(0) { $0 + 0xEC + $1.count * 24 } + 64)
+            put32(&v, 0xC8, 1); put32(&v, 0xCC, 2)
+            put16(&v, 2048, chains.count)
+            for k in chains.indices {
+                put32(&v, 2048 + 8 + k * 4, UInt32(8 + chains.count * 4 + k * 4))
+                put16(&v, 2048 + 8 + chains.count * 4 + k * 4, k + 1)
+            }
+            put16(&v, 4096, chains.count)
+            var at = 8 + chains.count * 8
+            for (k, cells) in chains.enumerated() {
+                put32(&v, 4096 + 8 + k * 8, 0x8100_0000); put32(&v, 4096 + 8 + k * 8 + 4, UInt32(at))
+                let pgc = 4096 + at
+                v[pgc + 3] = UInt8(cells.count)
+                put16(&v, pgc + 0xE8, 0xEC)
+                for (c, cell) in cells.enumerated() { put32(&v, pgc + 0xEC + c * 24 + 8, cell.0); put32(&v, pgc + 0xEC + c * 24 + 20, cell.1) }
+                at += 0xEC + cells.count * 24
+            }
+            try? Data(v).write(to: dir.appendingPathComponent(String(format: "VTS_%02d_0.IFO", n)))
+        }
+        return dir
+    }
 
     static var window: NSWindow? { NSApp.windows.first { $0.isVisible && $0.canBecomeMain } }
 

@@ -53,7 +53,7 @@ video() {  # file seconds tone
     -map 0 -map 1 -map 2 -c:v mpeg2video -b:v 4M -aspect 16:9 -c:a ac3 -b:a 192k -t $2 -f vob "$1"
 }
 video "$WORK/discs/tv/ep1.vob" 9 300; video "$WORK/discs/tv/ep2.vob" 10 400; video "$WORK/discs/tv/ep3.vob" 11 500
-video "$WORK/discs/movie/feature.vob" 12 440
+video "$WORK/discs/movie/feature.vob" 20 440
 
 # --- the pretend server: the library has season 1 of Test Show with episode 1, its NFO and poster
 MEDIA=$WORK/server/media
