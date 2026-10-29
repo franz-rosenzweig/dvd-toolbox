@@ -100,6 +100,10 @@ if ! grep -q 'dvd-toolbox' "$WORK/tap/README.md"; then
 fi
 git -C "$WORK/tap" add Casks/dvd-toolbox.rb README.md
 git -C "$WORK/tap" commit -q -m "dvd-toolbox $V"
-git -C "$WORK/tap" pull -q --rebase
-git -C "$WORK/tap" push -q
+# the other apps release into the same tap: a push that loses the race rebases and tries again
+for try in 1 2 3 4 5; do
+  git -C "$WORK/tap" pull -q --rebase && git -C "$WORK/tap" push -q && break
+  [[ $try == 5 ]] && { echo "the tap would not take the cask" >&2; exit 1; }
+  sleep 3
+done
 say "released: $(gh release view "v$V" --repo $REPO --json url -q .url), and the cask is at $V"
