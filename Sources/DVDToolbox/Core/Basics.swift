@@ -59,8 +59,9 @@ enum Keychain {
 enum Config {
     static let defaults = UserDefaults.standard
 
+    /// Read live, so the self-test can change one while the app runs.
     static func env(_ key: String) -> String? {
-        ProcessInfo.processInfo.environment[key].flatMap { $0.isEmpty ? nil : $0 }
+        getenv(key).map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private static func saved(_ key: String) -> String {
@@ -183,6 +184,14 @@ extension Nav {
             NSWorkspace.shared.open(Bundle.main.bundleURL)
         }
     }
+}
+
+/// What to show for a failure: the app's own message, or "Can’t reach X · why" for a network error.
+func because(_ error: Error, _ fallback: String) -> String {
+    if let e = error as? AppError { return e.detail }
+    guard let u = error as? URLError else { return fallback }
+    let why = u.localizedDescription.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+    return why.isEmpty ? fallback : "\(fallback) · \(why)"
 }
 
 struct AppError: LocalizedError {

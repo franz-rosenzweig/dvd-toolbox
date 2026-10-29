@@ -59,6 +59,9 @@ enum SelfTest {
         check(Pick.guess(bonus, hint: LabelHint.parse("FILM")) == .movie && Pick.feature(bonus)?.index == 1, "a 95-minute film with two 25-minute extras is a movie")
         check(Pick.guess(DVDScan(titles: [t(1, 2700), t(2, 2600)], main: 1), hint: LabelHint.parse("SHOW_S2_D1")) == .tv, "two episodes and a season in the label are TV")
 
+        let mounted = DVDDisc(volume: URL(fileURLWithPath: "/Volumes/X"), label: "X", device: "/dev/disk8", id: "x")
+        check(mounted.input == "/dev/rdisk8", "HandBrake reads the raw drive, /dev/rdisk8, not the mounted /dev/disk8")
+        check(DVDDisc(volume: URL(fileURLWithPath: "/tmp/f"), label: "F", device: "", id: "f").input == "/tmp/f", "a folder is read as it is")
         check(Naming.clean("Mission: Impossible") == "Mission - Impossible", "a colon becomes a dash (\(Naming.clean("Mission: Impossible")))")
         check(Naming.clean("AC/DC?  Live*") == "AC-DC Live", "characters a file name cannot have are dropped or dashed (\(Naming.clean("AC/DC?  Live*")))")
         let amelie = Naming.folder("Ame\u{301}lie", "2001")
@@ -92,6 +95,17 @@ enum SelfTest {
 
     static func libraries() async {
         let s = DiscStore.shared
+        // Jellyfin not answering when the app starts: the reason shows, and the Disc page asks again until it does
+        // (on another page, so the Disc page's own asking does not answer for it meanwhile)
+        let jf = env["DVD_JELLYFIN_URL"] ?? ""
+        Nav.shared.place = .rips
+        await pause(0.5)
+        setenv("DVD_JELLYFIN_URL", "http://127.0.0.1:9/jf", 1)
+        await s.loadLibraries()
+        check(s.jellyfinError?.hasPrefix("Can’t reach Jellyfin · ") == true, "Jellyfin not answering shows why: \(s.jellyfinError ?? "-")")
+        setenv("DVD_JELLYFIN_URL", jf, 1)
+        Nav.shared.place = .disc
+        check(await until(15, { !s.libraries.isEmpty && s.jellyfinError == nil }), "and the Disc page asks again until it answers")
         await s.loadLibraries()
         check(s.libraries.map(\.name) == ["Movies", "Shows", "Music"], "Jellyfin's libraries: \(s.libraries.map(\.name))")
         check(s.library?.name == "Movies" && s.choices.map(\.name) == ["Movies"], "a movie goes to Movies")
@@ -206,7 +220,7 @@ enum SelfTest {
         let o = URL(fileURLWithPath: dest).appendingPathComponent("title-\(t.index).mkv")
         let secs = env["DVD_TEST_STOP_AT"] ?? "60"
         let begin = Date()
-        let r = try? await Proc.run(hb, HandBrake.args(input: d.volume.path, title: t.stored, output: o.path, encoder: Config.encoder))
+        let r = try? await Proc.run(hb, HandBrake.args(input: d.input, title: t.stored, output: o.path, encoder: Config.encoder))
         let took = Date().timeIntervalSince(begin)
         check(r?.status == 0 && FileManager.default.fileExists(atPath: o.path), "title \(t.index), first \(secs) s, ripped in \(Int(took)) s")
         if let got = await Jobs.duration(o) { log("INFO ripped \(String(format: "%.1f", got)) s of video, \(Fmt.size((try? FileManager.default.attributesOfItem(atPath: o.path)[.size] as? Int64) ?? 0)); \(String(format: "%.1f", got / max(1, took)))x real time") }

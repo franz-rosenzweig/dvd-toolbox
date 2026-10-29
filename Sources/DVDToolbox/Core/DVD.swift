@@ -8,6 +8,11 @@ struct DVDDisc: Equatable, Sendable {
     /// The label and the sizes of the disc's IFO files: the same disc gives the same id each time.
     var id: String
 
+    /// What HandBrake reads: the raw drive. Given the volume, HandBrake opens /dev/diskN, which macOS
+    /// keeps busy while the disc is mounted; libdvdcss then cannot open the drive, and libdvdread falls
+    /// back to reading through the file system, which fails on some discs ("Encode failed (error 5)").
+    var input: String { device.hasPrefix("/dev/disk") ? "/dev/r" + device.dropFirst(5) : volume.path }
+
     static func find() -> DVDDisc? {
         let fm = FileManager.default
         for v in fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: [.skipHiddenVolumes]) ?? [] {

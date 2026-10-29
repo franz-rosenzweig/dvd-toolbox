@@ -202,6 +202,7 @@ final class Jobs {
         guard !Task.isCancelled else { job.state = .cancelled; save(); return }
         guard let hb = HandBrake.locate() else { return fail(job, "HandBrakeCLI is missing (brew install handbrake)") }
         job.state = .ripping
+        save()
         Awake.shared.hold("Ripping a DVD")
         defer { Awake.shared.release() }
         let fm = FileManager.default
@@ -235,17 +236,19 @@ final class Jobs {
                     throw error
                 }
                 if Task.isCancelled { try? fm.removeItem(at: partial); throw CancellationError() }
+                Self.keepLog(o, name: dest.deletingPathExtension().lastPathComponent)
                 let size = (try? fm.attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
-                guard o.status == 0, size > 0 else {
+                let got = size > 0 && Config.env("DVD_TEST_STOP_AT") == nil ? await Self.duration(partial) : nil
+                let whole = got.map { abs($0 - Double(p.seconds)) <= max(10, Double(p.seconds) * 0.03) }
+                // HandBrake can report a read error for sectors after the end of the film (some discs carry them
+                // to confuse rippers): a file that plays the title's whole length is kept all the same
+                guard size > 0, o.status == 0 ? whole != false : whole == true else {
                     try? fm.removeItem(at: partial)
                     job.parts[i].state = .failed
-                    let why = o.errText.split(separator: "\n").last { $0.localizedCaseInsensitiveContains("error") || $0.contains("libdvd") }
-                    throw AppError("\(p.label): " + (why.map(String.init) ?? "HandBrake exit \(o.status)"))
-                }
-                if Config.env("DVD_TEST_STOP_AT") == nil, let got = await Self.duration(partial), abs(got - Double(p.seconds)) > max(10, Double(p.seconds) * 0.03) {
-                    try? fm.removeItem(at: partial)
-                    job.parts[i].state = .failed
-                    throw AppError("\(p.label): \(Fmt.clock(Int(got))) of \(Fmt.clock(p.seconds))")
+                    var why = o.errText.split(separator: "\n").last { $0.localizedCaseInsensitiveContains("error") || $0.contains("libdvd") }.map(String.init) ?? "HandBrake exit \(o.status)"
+                    if why.contains("(error 5)") { why = "Can’t read the disc" }
+                    if let got, whole == false { why += " at \(Fmt.clock(Int(got))) of \(Fmt.clock(p.seconds))" }
+                    throw AppError("\(p.label): \(why)")
                 }
                 try? fm.removeItem(at: dest)
                 try fm.moveItem(at: partial, to: dest)
@@ -267,6 +270,16 @@ final class Jobs {
             job.current = nil
             fail(job, (error as? AppError)?.detail ?? error.localizedDescription)
         }
+    }
+
+    /// HandBrake's log of the last rip of a file, in ~/Library/Logs/DVD Toolbox.
+    nonisolated static var logs: URL {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/DVD Toolbox", isDirectory: true)
+    }
+
+    nonisolated static func keepLog(_ o: Proc.Output, name: String) {
+        try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        try? o.stderr.write(to: logs.appendingPathComponent(name + ".log"))
     }
 
     /// How long a file plays, by ffprobe.

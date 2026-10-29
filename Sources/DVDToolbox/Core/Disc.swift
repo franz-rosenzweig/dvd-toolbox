@@ -42,6 +42,7 @@ final class DiscStore {
     var present: Set<Int> = []
     var checking = false
     var serverError: String?
+    var jellyfinError: String?
 
     /// Set by the self-test to show a disc that is not in the drive.
     var frozen = false
@@ -93,7 +94,7 @@ final class DiscStore {
             scanning = true
             defer { scanning = false }
             do {
-                let s = try await HandBrake.scan(d.volume.path, minimum: minimum)
+                let s = try await HandBrake.scan(d.input, minimum: minimum)
                 guard disc?.id == d.id else { return }
                 scan = s
                 kind = Pick.guess(s, hint: hint)
@@ -146,7 +147,7 @@ final class DiscStore {
             error = r.isEmpty ? "Not on TMDB" : nil
             if let first = r.first { await choose(first.id) } else { chosen = nil; poster = nil }
         } catch {
-            self.error = (error as? AppError)?.detail ?? "Can’t reach TMDB"
+            self.error = because(error, "Can’t reach TMDB")
         }
     }
 
@@ -181,7 +182,7 @@ final class DiscStore {
         guard let jf = Config.jellyfin else { return }
         do {
             libraries = try await jf.libraries()
-            serverError = nil
+            jellyfinError = nil
             for k in Kind.allCases {
                 let own = libraries.filter { $0.takes.contains(k) }
                 let current = k == .movie ? movieLibrary : tvLibrary
@@ -189,7 +190,7 @@ final class DiscStore {
                 setLibrary(pick.id, for: k)
             }
         } catch {
-            serverError = (error as? AppError)?.detail ?? "Can’t reach Jellyfin"
+            jellyfinError = because(error, "Can’t reach Jellyfin")
         }
     }
 
@@ -217,6 +218,8 @@ final class DiscStore {
         throw AppError("\(lib.name): folder not found on the server")
     }
 
+    /// The choice the first episode was last worked out for.
+    private var numbered: String?
     private var stamp: String { "\(item?.id ?? 0)|\(kind.rawValue)|\(season)|\(library?.id ?? "")" }
 
     /// What of this title the server already has: its folder, and for a season which episodes.
@@ -238,8 +241,11 @@ final class DiscStore {
             }
             serverError = nil
         } catch {
-            serverError = (error as? AppError)?.detail ?? "Can’t reach the server"
+            serverError = because(error, "Can’t reach the server")
+            // asked again while the server is away: a first episode set by hand stays as it is
+            if numbered == want { return }
         }
+        numbered = want
         if kind == .tv {
             let n = max(1, selected.count)
             if let last = present.max() { firstEpisode = last + 1 }
@@ -306,7 +312,7 @@ final class DiscStore {
                           localRoot: Config.ripsFolder.appendingPathComponent(Naming.clean(lib.name), isDirectory: true),
                           library: lib.name, serverFolder: f.server, jellyfinFolder: f.jellyfin, top: top,
                           search: it.title, season: kind == .tv ? season : nil, upload: upload)
-            job.input = d.volume.path
+            job.input = d.input
             job.discID = d.id
             job.poster = poster
             Jobs.shared.start(job, poster: poster, nfo: nfo)

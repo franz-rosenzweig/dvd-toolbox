@@ -89,13 +89,13 @@ struct SettingsForm: View {
         storedMedia = media.trimmingCharacters(in: .whitespaces)
         storedRips = rips.trimmingCharacters(in: .whitespaces)
         tmdbResult = nil; jellyfinResult = nil; sshResult = nil
-        do { try await TMDB.check(key); tmdbResult = "Connected" } catch { tmdbResult = (error as? AppError)?.detail ?? "Can’t reach TMDB" }
+        do { try await TMDB.check(key); tmdbResult = "Connected" } catch { tmdbResult = because(error, "Can’t reach TMDB") }
         if let jf = Config.jellyfin {
             do {
                 let name = try await jf.info()
                 _ = try await jf.libraries()
                 jellyfinResult = name.isEmpty ? "Connected" : "Connected · \(name)"
-            } catch { jellyfinResult = (error as? AppError)?.detail ?? "Can’t reach Jellyfin" }
+            } catch { jellyfinResult = because(error, "Can’t reach Jellyfin") }
         } else {
             jellyfinResult = "Not a valid address"
         }

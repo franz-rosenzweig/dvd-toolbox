@@ -16,7 +16,16 @@ struct DiscView: View {
             }
         }
         .navigationTitle(store.disc?.label ?? "Disc")
-        .task { if store.libraries.isEmpty { await store.loadLibraries() } }
+        .task {
+            // Jellyfin or the server may not answer at first (the Mac has just woken, the network is coming up):
+            // ask again until they do
+            while !Task.isCancelled {
+                if store.libraries.isEmpty || store.jellyfinError != nil { await store.loadLibraries() }
+                if store.serverError != nil, store.item != nil { await store.checkServer() }
+                let fine = !store.libraries.isEmpty && store.jellyfinError == nil && store.serverError == nil
+                try? await Task.sleep(for: .seconds(fine ? 30 : 10))
+            }
+        }
     }
 
     private func content(_ disc: DVDDisc) -> some View {
@@ -24,6 +33,7 @@ struct DiscView: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 if let e = store.error { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                if let e = store.jellyfinError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if let e = store.serverError { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if store.scanning {
                     HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Reading the disc").foregroundStyle(.secondary) }
