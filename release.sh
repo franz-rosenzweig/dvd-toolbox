@@ -91,8 +91,8 @@ cask "dvd-toolbox" do
 
   app "DVD Toolbox.app"
 
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/DVD Toolbox.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/DVD Toolbox.app"]
   end
 end
 CASK
