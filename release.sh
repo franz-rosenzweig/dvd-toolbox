@@ -28,6 +28,9 @@ source "$CONF"
 SIGN_KEYCHAIN=${SIGN_KEYCHAIN/#\~/$HOME}; SIGN_PASSWORD_FILE=${SIGN_PASSWORD_FILE/#\~/$HOME}
 REPO=franz-rosenzweig/dvd-toolbox
 say() { echo "release: $*"; }
+# Commits and tags that go public carry GitHub's noreply address, whatever
+# this machine's own git identity is (it may be a personal one)
+NOREPLY=(-c user.name=franz-rosenzweig -c user.email=159979406+franz-rosenzweig@users.noreply.github.com)
 fail() { echo "CHECK FAILED: $*" >&2; exit 1; }
 
 # what ships is what is on origin/main
@@ -91,8 +94,8 @@ cask "dvd-toolbox" do
 
   app "DVD Toolbox.app"
 
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/DVD Toolbox.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/DVD Toolbox.app"]
   end
 end
 CASK
@@ -100,10 +103,10 @@ if ! grep -q 'dvd-toolbox' "$WORK/tap/README.md"; then
   echo "| [dvd-toolbox](Casks/dvd-toolbox.rb) | [DVD Toolbox](https://github.com/$REPO): rips DVDs into a Jellyfin library, named from TMDB |" >> "$WORK/tap/README.md"
 fi
 git -C "$WORK/tap" add Casks/dvd-toolbox.rb README.md
-git -C "$WORK/tap" commit -q -m "dvd-toolbox $V"
+git -C "$WORK/tap" "${NOREPLY[@]}" commit -q -m "dvd-toolbox $V"
 # the other apps release into the same tap: a push that loses the race rebases and tries again
 for try in 1 2 3 4 5; do
-  git -C "$WORK/tap" pull -q --rebase && git -C "$WORK/tap" push -q && break
+  git -C "$WORK/tap" "${NOREPLY[@]}" pull -q --rebase && git -C "$WORK/tap" push -q && break
   [[ $try == 5 ]] && { echo "the tap would not take the cask" >&2; exit 1; }
   sleep 3
 done
